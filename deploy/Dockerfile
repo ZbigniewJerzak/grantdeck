@@ -9,7 +9,8 @@ COPY grantdeck ./grantdeck
 COPY deploy ./deploy
 
 RUN pip install --no-cache-dir --prefix=/usr/local ".[docker]" \
-    && PYTHONPATH=/usr/local/lib/python3.14/site-packages GDK_ENV=development python manage.py collectstatic --noinput
+    && ln -s "$(echo /usr/local/lib/python3*)" /usr/local/lib/python-current \
+    && PYTHONPATH=/usr/local/lib/python-current/site-packages GDK_ENV=development python manage.py collectstatic --noinput
 
 FROM cgr.dev/chainguard/python:latest
 
@@ -17,7 +18,7 @@ ARG GDK_RELEASE_TAG=
 
 ENV PYTHONUNBUFFERED=1
 ENV PATH="/usr/local/bin:${PATH}"
-ENV PYTHONPATH="/app:/usr/local/lib/python3.14/site-packages"
+ENV PYTHONPATH="/app:/usr/local/lib/python-current/site-packages"
 ENV GDK_RELEASE_TAG=${GDK_RELEASE_TAG}
 
 COPY --from=builder /usr/local /usr/local

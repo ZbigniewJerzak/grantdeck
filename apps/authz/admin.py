@@ -26,6 +26,7 @@ ENVOY_POLICY_UPDATE_MESSAGE = (
 
 class ProjectModelLimitInline(admin.TabularInline):
     model = ProjectModelLimit
+    fields = ['model_name', 'daily_token_limit', 'max_parallel_requests', 'max_pending_requests']
     extra = 1
 
 

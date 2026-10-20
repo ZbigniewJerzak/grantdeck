@@ -39,6 +39,8 @@ def post_limit_class(client, policy_class=None, *, name=None, resources=(), rows
             data[f'model_limits-{index}-limit_class'] = str(policy_class.pk)
         data[f'model_limits-{index}-model_name'] = row.get('model_name', '')
         data[f'model_limits-{index}-daily_token_limit'] = str(row.get('daily_token_limit', ''))
+        data[f'model_limits-{index}-max_parallel_requests'] = str(row.get('max_parallel_requests', ''))
+        data[f'model_limits-{index}-max_pending_requests'] = str(row.get('max_pending_requests', ''))
         if row.get('delete'):
             data[f'model_limits-{index}-DELETE'] = 'on'
 
@@ -52,6 +54,8 @@ def post_limit_class(client, policy_class=None, *, name=None, resources=(), rows
         data[f'model_limits-{index}-limit_class'] = str(policy_class.pk) if policy_class else ''
         data[f'model_limits-{index}-model_name'] = ''
         data[f'model_limits-{index}-daily_token_limit'] = ''
+        data[f'model_limits-{index}-max_parallel_requests'] = ''
+        data[f'model_limits-{index}-max_pending_requests'] = ''
 
     return client.post(url, data)
 
@@ -99,12 +103,16 @@ def test_admin_warns_when_changing_model_limit(client, django_user_model):
             'id': model_limit.pk,
             'model_name': model_limit.model_name,
             'daily_token_limit': 200_000,
+            'max_parallel_requests': 12,
+            'max_pending_requests': 24,
         }],
     )
 
     assert response.status_code == 302
     model_limit.refresh_from_db()
     assert model_limit.daily_token_limit == 200_000
+    assert model_limit.max_parallel_requests == 12
+    assert model_limit.max_pending_requests == 24
     assert_policy_warning(response)
 
 

@@ -48,6 +48,7 @@ You can use `manage.py createsuperuser` in combination with the `/login/admin` e
 | `GDK_LOG_LEVEL`                           | No                    | No                     | `INFO`           | Log level for GrantDeck and Django request logs.               |
 | `GDK_USAGE_METRICS_TOKEN`                 | No                    | No                     | unset            | Secret used by Prometheus to read `/metrics`; unset disables scraping. |
 | `GDK_ALS_PORT`                            | No                    | No                     | `8001`           | Internal gRPC port for Envoy access-log streaming.             |
+| `GDK_ALS_MAX_WORKERS`                     | No                    | No                     | `256`            | Maximum concurrent Envoy ALS streams handled by each receiver. |
 | `GDK_AIGATEWAY_GATEWAY_NAME`              | Yes                   | Yes                    | unset            | AIGateway Gateway name used by exported routes.                |
 | `GDK_AIGATEWAY_GATEWAY_NAMESPACE`         | Yes                   | Yes                    | unset            | AIGateway Gateway namespace used by exported routes.           |
 | `GDK_AIGATEWAY_GATEWAY_SECTION`           | Yes                   | Yes                    | unset            | AIGateway Gateway listener section used by exported routes.    |
@@ -82,7 +83,7 @@ The Envoy ALS bindings are generated from `proto/usage_als.proto`. Install the d
 make generate_als_proto
 ```
 
-On startup, the web container runs database migrations and then starts Gunicorn on port 8000. The same image also runs a separate `usage-receiver` container in the pod on internal gRPC port 8001. In deployments with multiple replicas, avoid starting several schema-changing revisions at the same time.
+On startup, the web container runs database migrations and then starts Gunicorn on port 8000. The same image also runs a separate `usage-receiver` container in the pod on internal gRPC port 8001. Each long-lived Envoy ALS stream occupies one receiver worker, so `GDK_ALS_MAX_WORKERS` must cover the maximum number of streams that can reach a single receiver. Receiver replicas improve availability but do not guarantee an even distribution of existing streams. In deployments with multiple replicas, avoid starting several schema-changing revisions at the same time.
 
 ## Kubernetes
 
@@ -123,7 +124,35 @@ GrantDeck returns the authenticated user in the `x-current-user` HTTP header, th
 
 Each project must also have a superuser-assigned limit class. The class owns the URL resources, model names, and daily token limits. Successful checks return `x-current-quota-class` and an opaque `x-current-quota-key`; forward both from Envoy's authorization response to the AIGateway routes. A project without a class is denied.
 
-To render the current class/model route and quota resources for review, configure the AIGateway variables in `.env` and run `make export_quota_manifests`. The command emits YAML-compatible JSON documents to standard output; commit and apply the reviewed output through the existing cluster workflow. Backend identities are deployment configuration; model names and quota limits remain GrantDeck policy data.
+Each class/model entry in Django admin also supports optional Envoy concurrency
+limits: maximum parallel requests and maximum pending requests. The initial
+values for `bht/large`, `bht/medium`, and `bht/small` are 16/32, 8/16, and 1/4,
+respectively. These values are emitted as `BackendTrafficPolicy` circuit-breaker
+settings by the quota export. Changes take effect after running the export and
+deploying the ingress bundle.
+
+To refresh the class/model routes and quota resources from the live production
+database, run the operational target from the inference repository. The export
+creates one file per Kubernetes resource under
+`llm/llm-ingress/grantdeck-generated-quota/`:
+
+```bash
+make -C llm export_grantdeck_quota
+```
+
+The target executes `python manage.py export_quota_manifests` inside the
+GrantDeck pod and writes the reviewed bundle to
+the generated directory. After reviewing the generated files, apply them
+together with the other ingress resources:
+
+```bash
+make -C llm deploy_ingress
+```
+
+Every policy model name must have an exact entry in
+`GDK_AIGATEWAY_MODEL_BACKENDS`; backend identities are deployment
+configuration, while model names and quota limits remain GrantDeck policy
+data.
 
 Token accounting is based on Envoy Access Log Service (ALS) records. Envoy forwards the identity headers returned by GrantDeck authorization (`x-current-user`, `x-current-project`, and `x-current-project-id`) and the AI Gateway token metadata (`io.envoy.ai_gateway/llm_total_token`) to the internal `usage-receiver`. GrantDeck stores each request idempotently in PostgreSQL and maintains daily aggregates by user, project, and model. The `/metrics` endpoint exposes those aggregates as `grantdeck_api_tokens_used{user,project,model}`; Prometheus should authenticate with the `GDK_USAGE_METRICS_TOKEN` bearer token. The frontend reads the same database aggregates, so the UI and Prometheus have one authoritative source.
 

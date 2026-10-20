@@ -299,6 +299,18 @@ class ProjectModelLimit(models.Model):
     )
     model_name = models.CharField(max_length=200)
     daily_token_limit = models.PositiveBigIntegerField(validators=[MinValueValidator(1)])
+    max_parallel_requests = models.PositiveIntegerField(
+        blank=True,
+        null=True,
+        validators=[MinValueValidator(1)],
+        help_text='Maximum number of requests Envoy may send to this model at once.',
+    )
+    max_pending_requests = models.PositiveIntegerField(
+        blank=True,
+        null=True,
+        validators=[MinValueValidator(0)],
+        help_text='Maximum number of requests Envoy may queue for this model.',
+    )
 
     class Meta:
         ordering = ['model_name']
@@ -310,6 +322,14 @@ class ProjectModelLimit(models.Model):
             models.CheckConstraint(
                 condition=models.Q(daily_token_limit__gt=0),
                 name='project_model_daily_limit_positive',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(max_parallel_requests__isnull=True) | models.Q(max_parallel_requests__gt=0),
+                name='project_model_parallel_limit_positive',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(max_pending_requests__isnull=True) | models.Q(max_pending_requests__gte=0),
+                name='project_model_pending_limit_nonnegative',
             ),
         ]
 

@@ -1,6 +1,8 @@
 import logging
 from datetime import datetime, timezone
 
+from django.db import close_old_connections
+
 from apps.usage.proto import usage_als_pb2, usage_als_pb2_grpc
 from apps.usage.service import UsageRecord, record_usage
 
@@ -81,12 +83,16 @@ def parse_entry(entry, now=None):
 class AccessLogService(usage_als_pb2_grpc.AccessLogServiceServicer):
     def StreamAccessLogs(self, request_iterator, context):
         for message in request_iterator:
-            if not message.HasField('http_logs'):
-                continue
-            for entry in message.http_logs.log_entry:
-                record = parse_entry(entry)
-                if record is None:
-                    logger.warning('Ignored incomplete Envoy usage record')
+            close_old_connections()
+            try:
+                if not message.HasField('http_logs'):
                     continue
-                record_usage(record)
+                for entry in message.http_logs.log_entry:
+                    record = parse_entry(entry)
+                    if record is None:
+                        logger.warning('Ignored incomplete Envoy usage record')
+                        continue
+                    record_usage(record)
+            finally:
+                close_old_connections()
         return usage_als_pb2.StreamAccessLogsResponse()

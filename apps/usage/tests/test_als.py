@@ -35,3 +35,26 @@ def test_parse_entry_rejects_records_without_project_id():
     entry.common_properties.metadata.filter_metadata[METADATA_NAMESPACE].fields[TOKEN_METADATA_KEY].number_value = 1
 
     assert parse_entry(entry) is None
+
+
+def test_stream_releases_database_connections_between_messages(monkeypatch):
+    from apps.usage import als
+
+    close_connections = []
+    monkeypatch.setattr(als, 'close_old_connections', lambda: close_connections.append(True))
+    monkeypatch.setattr(als, 'record_usage', lambda record: True)
+
+    message = usage_als_pb2.StreamAccessLogsMessage()
+    entry = message.http_logs.log_entry.add()
+    entry.common_properties.route_name = 'route-large'
+    entry.request.request_id = 'request-123'
+    entry.request.request_headers['x-current-user'] = 'alice'
+    entry.request.request_headers['x-current-project'] = 'research'
+    entry.request.request_headers['x-current-project-id'] = '7'
+    entry.common_properties.metadata.filter_metadata[METADATA_NAMESPACE].fields[
+        TOKEN_METADATA_KEY
+    ].number_value = 123
+
+    als.AccessLogService().StreamAccessLogs(iter([message]), None)
+
+    assert close_connections == [True, True]

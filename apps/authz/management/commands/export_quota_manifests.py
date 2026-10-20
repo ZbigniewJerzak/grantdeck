@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
@@ -62,7 +63,7 @@ def route_document(policy_class, model_limit):
 
 def quota_document(policy_class, model_limit):
     target_name = exported_route_name(policy_class, model_limit.model_name)
-    return {
+    document = {
         'apiVersion': 'gateway.envoyproxy.io/v1alpha1',
         'kind': 'BackendTrafficPolicy',
         'metadata': {
@@ -104,6 +105,17 @@ def quota_document(policy_class, model_limit):
             },
         },
     }
+    circuit_breaker = {
+        field: value
+        for field, value in (
+            ('maxParallelRequests', model_limit.max_parallel_requests),
+            ('maxPendingRequests', model_limit.max_pending_requests),
+        )
+        if value is not None
+    }
+    if circuit_breaker:
+        document['spec']['circuitBreaker'] = circuit_breaker
+    return document
 
 
 def security_policy_document(route_names):
@@ -144,9 +156,16 @@ def security_policy_document(route_names):
 
 
 class Command(BaseCommand):
-    help = 'Export class/model AIGateway routes and quota policies as YAML-compatible JSON documents.'
+    help = 'Export class/model AIGateway resources as separate YAML-compatible JSON files.'
 
-    def handle(self, *args, **options):
+    def add_arguments(self, parser):
+        parser.add_argument(
+            '--output-dir',
+            type=Path,
+            help='Write one resource file per Kubernetes object to this directory.',
+        )
+
+    def export_documents(self):
         policy_classes = list(
             ProjectLimitClass.objects.order_by('pk').prefetch_related('model_limits')
         )
@@ -158,11 +177,45 @@ class Command(BaseCommand):
                 documents.extend([route, quota_document(policy_class, model_limit)])
                 route_names.append(route['metadata']['name'])
 
-        if not route_names:
+        if route_names:
+            documents.append(security_policy_document(route_names))
+        return documents
+
+    def write_directory(self, output_dir, documents):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        marker = output_dir / '.grantdeck-export'
+        existing_files = [path for path in output_dir.iterdir() if path != marker]
+        if existing_files and not marker.exists():
+            raise CommandError(
+                f'Output directory {str(output_dir)!r} must be empty except for .grantdeck-export.'
+            )
+        if any(not path.is_file() or path.suffix != '.yml' for path in existing_files):
+            raise CommandError(
+                f'Output directory {str(output_dir)!r} contains unmanaged files.'
+            )
+        for path in existing_files:
+            path.unlink()
+        marker.touch()
+        for document in documents:
+            resource_name = document['metadata']['name']
+            output_file = output_dir / f'{resource_name}.yml'
+            output_file.write_text(
+                json.dumps(document, indent=2, ensure_ascii=False) + '\n',
+                encoding='utf-8',
+            )
+
+    def handle(self, *args, **options):
+        documents = self.export_documents()
+        output_dir = options.get('output_dir')
+
+        if output_dir is not None:
+            self.write_directory(Path(output_dir), documents)
+            return
+
+        if not documents:
             self.stdout.write('# No project model limits are configured.')
             return
 
-        documents.append(security_policy_document(route_names))
         self.stdout.write('---')
         for index, document in enumerate(documents):
             if index:

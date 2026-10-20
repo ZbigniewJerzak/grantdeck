@@ -1,6 +1,9 @@
 # GrantDeck
 
-GrantDeck offers a self-service web portal for retrieving API bearer tokens. It is intended for cases where JWTs are not an option, such as with LLM client tooling. GrantDeck offers a authz endpoint for generated tokens that can be integrated into reverse proxies. 
+GrantDeck offers two things:
+
+- A self-service web portal for users that want to generate their personal API bearer token. It is intended for cases where JWTs are not an option, such as with LLM client tooling. Administrators can configure model token and concurrency limits for users and projects.
+- An authz endpoint that can be integrated into reverse proxies intended for AI operation. 
 
 GrantDeck defines the following basic concepts:
 
@@ -131,28 +134,10 @@ respectively. These values are emitted as `BackendTrafficPolicy` circuit-breaker
 settings by the quota export. Changes take effect after running the export and
 deploying the ingress bundle.
 
-To refresh the class/model routes and quota resources from the live production
-database, run the operational target from the inference repository. The export
-creates one file per Kubernetes resource under
-`llm/llm-ingress/grantdeck-generated-quota/`:
-
-```bash
-make -C llm export_grantdeck_quota
-```
-
-The target executes `python manage.py export_quota_manifests` inside the
-GrantDeck pod and writes the reviewed bundle to
-the generated directory. After reviewing the generated files, apply them
-together with the other ingress resources:
-
-```bash
-make -C llm deploy_ingress
-```
+To refresh the class/model routes and quota resources from the live production database, run the operational target from the inference repository. After reviewing the generated files, apply them together with the other ingress resources.
 
 Every policy model name must have an exact entry in
-`GDK_AIGATEWAY_MODEL_BACKENDS`; backend identities are deployment
-configuration, while model names and quota limits remain GrantDeck policy
-data.
+`GDK_AIGATEWAY_MODEL_BACKENDS`; backend identities are deployment configuration, while model names and quota limits remain GrantDeck policy data.
 
 Token accounting is based on Envoy Access Log Service (ALS) records. Envoy forwards the identity headers returned by GrantDeck authorization (`x-current-user`, `x-current-project`, and `x-current-project-id`) and the AI Gateway token metadata (`io.envoy.ai_gateway/llm_total_token`) to the internal `usage-receiver`. GrantDeck stores each request idempotently in PostgreSQL and maintains daily aggregates by user, project, and model. The `/metrics` endpoint exposes those aggregates as `grantdeck_api_tokens_used{user,project,model}`; Prometheus should authenticate with the `GDK_USAGE_METRICS_TOKEN` bearer token. The frontend reads the same database aggregates, so the UI and Prometheus have one authoritative source.
 

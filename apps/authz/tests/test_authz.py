@@ -8,6 +8,7 @@ from django.contrib.auth.models import Group
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.test import Client
+from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
 from social_django.models import Association, Nonce, UserSocialAuth
@@ -428,6 +429,18 @@ def test_project_token_allows_assigned_resource(client, user, project, caplog):
     assert response.headers['x-current-quota-key'] == project.quota_key
     record = caplog.records[0]
     assert record.authz_resource_url == 'http://testserver/api/models'
+
+
+@override_settings(AUTHZ_CANONICAL_ORIGIN='https://api.example.test')
+def test_project_token_uses_canonical_origin_for_internal_requests(client, user, project, caplog):
+    allow_class_url(project, 'https://api.example.test/api')
+    _, raw = StaticToken.create_token(user, 'deploy', 30, project)
+
+    with caplog.at_level(logging.INFO, logger='apps.authz.views'):
+        response = authz(client, raw, path='/authz/check/api/models')
+
+    assert_empty(response, 200)
+    assert caplog.records[0].authz_resource_url == 'https://api.example.test/api/models'
 
 
 def test_project_token_denies_legacy_project_resource_without_class(client, user):

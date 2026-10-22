@@ -1,5 +1,6 @@
 import logging
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -62,6 +63,8 @@ def _unauthorized_response():
 
 def _protected_url(request, protected_path):
     path = f'/{protected_path}' if protected_path else '/'
+    if settings.AUTHZ_CANONICAL_ORIGIN:
+        return f'{settings.AUTHZ_CANONICAL_ORIGIN}{path}'
     return request.build_absolute_uri(path)
 
 

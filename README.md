@@ -35,6 +35,7 @@ You can use `manage.py createsuperuser` in combination with the `/login/admin` e
 | `GDK_SECRET_KEY`                          | No                    | Yes                    | Random string    | Unique secret key used for internal cryptography.             |
 | `GDK_DATABASE_URL`                        | No                    | Yes                    | `db.sqlite3`     | Database connection details, as database URL.                 |
 | `GDK_ALLOWED_HOSTS`                       | No                    | Yes                    | `""`             | Comma-separated list of host names for the installation.      |
+| `GDK_AUTHZ_CANONICAL_ORIGIN`              | No                    | Yes                    | `""`             | Public origin used to identify resources during authorization. |
 | `GDK_CSRF_TRUSTED_ORIGINS`                | No                    | No                     | `""`             | Comma-separated trusted origins for CSRF protection.          |
 | `GDK_OIDC_ENDPOINT`                       | No                    | Yes                    | `""`             | OpenID Connect issuer endpoint.                               |
 | `GDK_OIDC_CLIENT_ID`                      | No                    | Yes                    | `""`             | OpenID Connect client ID.                                     |
@@ -98,7 +99,7 @@ Create the local credentials file and replace both placeholder values:
 cp deploy/k8s/overlays/production/secret.env.example deploy/k8s/overlays/production/secret.env
 ```
 
-Set a strong random `GDK_SECRET_KEY`, OIDC client secret, and PostgreSQL password. `secret.env` is gitignored. Then edit `config.env` in the same directory for the OIDC issuer and client ID. Set `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_STORAGE`, `K8S_NAMESPACE`, `ROUTE_HOST`, `ROUTE_PREFIX`, `GATEWAY_NAME`, `GATEWAY_NAMESPACE`, `GATEWAY_SECTION`, and `IMAGE` in `config.env` to match your cluster. Set `GDK_DATABASE_URL` in `secret.env` to the PostgreSQL service URL. Keep `GDK_ALLOWED_HOSTS` and `GDK_CSRF_TRUSTED_ORIGINS` aligned with the route hostname. For a non-root prefix such as `/grantdeck`, set both `ROUTE_PREFIX` and `GDK_SCRIPT_NAME` to `/grantdeck`.
+Set a strong random `GDK_SECRET_KEY`, OIDC client secret, and PostgreSQL password. `secret.env` is gitignored. Then edit `config.env` in the same directory for the OIDC issuer and client ID. Set `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_STORAGE`, `K8S_NAMESPACE`, `ROUTE_HOST`, `ROUTE_PREFIX`, `GATEWAY_NAME`, `GATEWAY_NAMESPACE`, `GATEWAY_SECTION`, and `IMAGE` in `config.env` to match your cluster. Set `GDK_DATABASE_URL` in `secret.env` to the PostgreSQL service URL. Keep `GDK_ALLOWED_HOSTS` and `GDK_CSRF_TRUSTED_ORIGINS` aligned with the route hostname. Set `GDK_AUTHZ_CANONICAL_ORIGIN` to the externally visible API origin whose URLs are registered as GrantDeck resources, for example `https://lumis-api.bht-berlin.de`. For a non-root prefix such as `/grantdeck`, set both `ROUTE_PREFIX` and `GDK_SCRIPT_NAME` to `/grantdeck`.
 
 To grant Django administrator access to an OIDC account, set `GDK_OIDC_ADMIN_USERNAME` in the generated ConfigMap input. When that username completes OIDC login, GrantDeck promotes the account to superuser and staff. No shell access or local password is required.
 
@@ -122,6 +123,26 @@ protected request: GET https://api.example.com/api/models
 authz request:     GET /authz/check/api/models
 checked resource:  https://api.example.com/api/models
 ```
+
+### Canonical resource origin
+
+GrantDeck authorizes a request by matching its absolute URL against the resources assigned to a project. In production, `GDK_AUTHZ_CANONICAL_ORIGIN` defines the scheme and authority used to construct that URL:
+
+```env
+GDK_AUTHZ_CANONICAL_ORIGIN=https://api.example.com
+```
+
+The value must be an origin only (`scheme://host` with an optional port), without a path. A trailing slash is accepted and removed. It must match the origin used by resource URLs in GrantDeck.
+
+This setting is particularly important when Envoy calls GrantDeck through an internal Kubernetes service. For example, a request may arrive at the authorization endpoint with `Host: envoy-internal.envoy.svc.cluster.local` even though the protected resource is registered as `https://api.example.com/v1/models`. GrantDeck uses the canonical origin together with the protected path, so both public and internal Envoy listeners authorize the same resource:
+
+```text
+authz request host: envoy-internal.envoy.svc.cluster.local
+protected path:    /v1/models
+checked resource:  https://api.example.com/v1/models
+```
+
+Internal service names used as request hosts must still be included in `GDK_ALLOWED_HOSTS`. In development, the setting defaults to empty; GrantDeck then derives the origin from the authorization request as before.
 
 GrantDeck returns the authenticated user in the `x-current-user` HTTP header, the project shortcut in `x-current-project`, and the immutable database project ID in `x-current-project-id`; enable all three in the `allowed_upstream_headers` block for `authorization_response` accordingly.
 

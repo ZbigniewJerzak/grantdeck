@@ -1,0 +1,38 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: grantdeck-policy-deployer
+rules:
+  - apiGroups:
+      - aigateway.envoyproxy.io
+    resources:
+      - aigatewayroutes
+    verbs:
+      - get
+      - list
+      - create
+      - patch
+      - delete
+  - apiGroups:
+      - gateway.envoyproxy.io
+    resources:
+      - backendtrafficpolicies
+      - securitypolicies
+    verbs:
+      - get
+      - list
+      - create
+      - patch
+      - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: grantdeck-policy-deployer
+subjects:
+  - kind: ServiceAccount
+    name: grantdeck
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: grantdeck-policy-deployer

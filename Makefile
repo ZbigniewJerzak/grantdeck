@@ -1,4 +1,4 @@
-.PHONY: venv run test export_quota_manifests generate_als_proto deploy release
+.PHONY: venv run test generate_als_proto deploy release
 
 venv: .venv/.installed
 
@@ -15,9 +15,6 @@ venv: .venv/.installed
 
 run: venv
 	set -a; [ ! -f .env ] || . ./.env; set +a; .venv/bin/python manage.py runserver
-
-export_quota_manifests: venv
-	set -a; [ ! -f .env ] || . ./.env; set +a; .venv/bin/python manage.py export_quota_manifests
 
 test: .venv/.dev-installed
 	.venv/bin/python -m pytest

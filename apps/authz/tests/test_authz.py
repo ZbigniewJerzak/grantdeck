@@ -149,15 +149,14 @@ def test_project_limit_class_resolves_endpoint_and_model_limit(project):
         policy_class.save(update_fields=['slug'])
 
 
-@pytest.mark.parametrize('field', ['max_parallel_requests', 'max_pending_requests'])
-def test_project_model_concurrency_limits_validate_values(field):
+def test_project_model_concurrency_limit_validates_values():
     policy_class = ProjectLimitClass(name='Basic', slug='basic')
     policy_class.save()
     model_limit = ProjectModelLimit(
         limit_class=policy_class,
         model_name='bht/large',
         daily_token_limit=12_000,
-        **{field: -1},
+        max_parallel_requests=-1,
     )
 
     with pytest.raises(ValidationError):

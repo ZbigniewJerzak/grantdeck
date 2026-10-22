@@ -164,17 +164,15 @@ def test_database_config_reads_gdk_database_url_in_development(monkeypatch):
 
 def test_aigateway_backend_mapping_requires_named_backend(monkeypatch):
     with pytest.raises(ImproperlyConfigured, match='backend name'):
-        reload_settings(
-            monkeypatch,
-            **PRODUCTION_ENV,
-            GDK_AIGATEWAY_MODEL_BACKENDS='{"bht/large": {}}',
-        )
+        reload_settings(monkeypatch, **(
+            PRODUCTION_ENV
+            | {'GDK_AIGATEWAY_MODEL_BACKENDS': '{"bht/large": {}}'}
+        ))
 
 
 def test_aigateway_backend_mapping_rejects_non_object_json(monkeypatch):
     with pytest.raises(ImproperlyConfigured, match='JSON object'):
-        reload_settings(
-            monkeypatch,
-            **PRODUCTION_ENV,
-            GDK_AIGATEWAY_MODEL_BACKENDS='[]',
-        )
+        reload_settings(monkeypatch, **(
+            PRODUCTION_ENV
+            | {'GDK_AIGATEWAY_MODEL_BACKENDS': '[]'}
+        ))

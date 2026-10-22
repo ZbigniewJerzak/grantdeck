@@ -14,6 +14,8 @@ spec:
       labels:
         app.kubernetes.io/name: grantdeck
     spec:
+      serviceAccountName: grantdeck
+      automountServiceAccountToken: false
       securityContext:
         fsGroup: 65532
         runAsNonRoot: true
@@ -37,6 +39,9 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            - name: kube-api-access
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
           startupProbe:
             httpGet:
               path: /healthz/
@@ -107,3 +112,21 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+        - name: kube-api-access
+          projected:
+            defaultMode: 420
+            sources:
+              - serviceAccountToken:
+                  expirationSeconds: 3607
+                  path: token
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        apiVersion: v1
+                        fieldPath: metadata.namespace

@@ -8,19 +8,18 @@ COPY apps ./apps
 COPY grantdeck ./grantdeck
 COPY deploy ./deploy
 
-RUN pip install --no-cache-dir --prefix=/usr/local ".[docker]" \
-    && PYTHONPATH=/usr/local/lib/python3.14/site-packages GDK_ENV=development python manage.py collectstatic --noinput
+RUN pip install --no-cache-dir --target=/opt/grantdeck-python ".[docker]" \
+    && PYTHONPATH=/opt/grantdeck-python GDK_ENV=development python manage.py collectstatic --noinput
 
 FROM cgr.dev/chainguard/python:latest
 
 ARG GDK_RELEASE_TAG=
 
 ENV PYTHONUNBUFFERED=1
-ENV PATH="/usr/local/bin:${PATH}"
-ENV PYTHONPATH="/app:/usr/local/lib/python3.14/site-packages"
+ENV PYTHONPATH="/app:/opt/grantdeck-python"
 ENV GDK_RELEASE_TAG=${GDK_RELEASE_TAG}
 
-COPY --from=builder /usr/local /usr/local
+COPY --from=builder /opt/grantdeck-python /opt/grantdeck-python
 COPY --from=builder --chown=65532:65532 /app /app
 
 WORKDIR /app

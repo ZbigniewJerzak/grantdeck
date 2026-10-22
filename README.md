@@ -127,14 +127,19 @@ GrantDeck returns the authenticated user in the `x-current-user` HTTP header, th
 
 Each project must also have a superuser-assigned limit class. The class owns the URL resources, model names, and daily token limits. Successful checks return `x-current-quota-class` and an opaque `x-current-quota-key`; forward both from Envoy's authorization response to the AIGateway routes. A project without a class is denied.
 
-Each class/model entry in Django admin also supports optional Envoy concurrency
-limits: maximum parallel requests and maximum pending requests. The initial
-values for `bht/large`, `bht/medium`, and `bht/small` are 16/32, 8/16, and 1/4,
-respectively. These values are emitted as `BackendTrafficPolicy` circuit-breaker
-settings by the quota export. Changes take effect after running the export and
-deploying the ingress bundle.
+Each class/model entry in Django admin also supports an optional Envoy maximum
+parallel request limit. The initial values for `bht/large`, `bht/medium`, and
+`bht/small` are 16, 8, and 1, respectively. These values are emitted as
+`BackendTrafficPolicy` circuit-breaker settings. Changes take effect after a
+superuser opens the model-limit list in Django administration and selects
+**Deploy all Envoy policies**.
 
-To refresh the class/model routes and quota resources from the live production database, run the operational target from the inference repository. After reviewing the generated files, apply them together with the other ingress resources.
+GrantDeck applies all class/model routes and quota resources directly to its
+own Kubernetes namespace. The deployment creates or updates the desired
+resources and removes stale resources carrying GrantDeck's management label.
+The pod therefore uses a dedicated service account with permissions limited to
+`AIGatewayRoute`, `BackendTrafficPolicy`, and `SecurityPolicy` resources in
+that namespace.
 
 Every policy model name must have an exact entry in
 `GDK_AIGATEWAY_MODEL_BACKENDS`; backend identities are deployment configuration, while model names and quota limits remain GrantDeck policy data.

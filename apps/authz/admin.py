@@ -2,7 +2,11 @@ from django import forms
 from django.contrib import admin
 from django.contrib import messages
 from django.contrib.auth.models import Group
+from django.core.exceptions import PermissionDenied
 from django.db.models import Count
+from django.http import HttpResponseNotAllowed
+from django.shortcuts import redirect
+from django.urls import path, reverse
 from social_django.models import Association, Nonce, UserSocialAuth
 
 from apps.authz.models import (
@@ -12,6 +16,11 @@ from apps.authz.models import (
     ProjectModelLimit,
     Resource,
     StaticToken,
+)
+from apps.authz.kubernetes import (
+    PolicyDeploymentError,
+    PolicyDeploymentInProgress,
+    deploy_all_policies,
 )
 
 
@@ -26,7 +35,7 @@ ENVOY_POLICY_UPDATE_MESSAGE = (
 
 class ProjectModelLimitInline(admin.TabularInline):
     model = ProjectModelLimit
-    fields = ['model_name', 'daily_token_limit', 'max_parallel_requests', 'max_pending_requests']
+    fields = ['model_name', 'daily_token_limit', 'max_parallel_requests']
     extra = 1
 
 
@@ -210,6 +219,78 @@ class ProjectLimitClassAdmin(SuperuserOnlyAdmin):
     @admin.display(description='Models')
     def model_count(self, policy_class):
         return policy_class.model_count_value
+
+
+@admin.register(ProjectModelLimit)
+class ProjectModelLimitAdmin(SuperuserOnlyAdmin):
+    change_list_template = 'admin/authz/projectmodellimit/change_list.html'
+    list_display = [
+        'model_name',
+        'limit_class',
+        'daily_token_limit',
+        'max_parallel_requests',
+    ]
+    list_filter = ['limit_class']
+    search_fields = ['model_name', 'limit_class__name', 'limit_class__slug']
+    autocomplete_fields = ['limit_class']
+    list_select_related = ['limit_class']
+
+    def get_urls(self):
+        custom_urls = [
+            path(
+                'deploy-policies/',
+                self.admin_site.admin_view(self.deploy_policies_view),
+                name='authz_projectmodellimit_deploy_policies',
+            ),
+        ]
+        return custom_urls + super().get_urls()
+
+    def deploy_policies_view(self, request):
+        if not request.user.is_superuser:
+            raise PermissionDenied
+        if request.method != 'POST':
+            return HttpResponseNotAllowed(['POST'])
+
+        try:
+            result = deploy_all_policies(actor=request.user.get_username())
+        except PolicyDeploymentInProgress as exc:
+            self.message_user(request, str(exc), level=messages.INFO)
+        except PolicyDeploymentError as exc:
+            self.message_user(request, str(exc), level=messages.ERROR)
+        else:
+            self.message_user(
+                request,
+                (
+                    f'Deployed {result.applied} Envoy policy resources in '
+                    f'{result.namespace}; pruned {result.pruned} stale resources.'
+                ),
+                level=messages.SUCCESS,
+            )
+        return redirect(reverse('admin:authz_projectmodellimit_changelist'))
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        self.message_user(
+            request,
+            ENVOY_POLICY_UPDATE_MESSAGE,
+            level=messages.WARNING,
+        )
+
+    def delete_model(self, request, obj):
+        super().delete_model(request, obj)
+        self.message_user(
+            request,
+            ENVOY_POLICY_UPDATE_MESSAGE,
+            level=messages.WARNING,
+        )
+
+    def delete_queryset(self, request, queryset):
+        super().delete_queryset(request, queryset)
+        self.message_user(
+            request,
+            ENVOY_POLICY_UPDATE_MESSAGE,
+            level=messages.WARNING,
+        )
 
 
 @admin.register(Resource)

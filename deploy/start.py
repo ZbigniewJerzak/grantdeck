@@ -22,8 +22,15 @@ def main():
     else:
         call_command("migrate", interactive=False)
     os.execvp(
-        "gunicorn",
-        ["gunicorn", "grantdeck.wsgi:application", "--bind", "0.0.0.0:8000"],
+        "python",
+        [
+            "python",
+            "-m",
+            "gunicorn",
+            "grantdeck.wsgi:application",
+            "--bind",
+            "0.0.0.0:8000",
+        ],
     )
 
 

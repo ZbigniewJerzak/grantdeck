@@ -172,6 +172,7 @@ def test_user_quota_rows_include_active_memberships_and_administered_projects_on
             limit_class=policy_class,
             model_name='bht/medium',
             daily_token_limit=100_000,
+            max_parallel_requests=8,
         )
         project.limit_class = policy_class
         project.save(update_fields=['limit_class'])
@@ -188,6 +189,9 @@ def test_user_quota_rows_include_active_memberships_and_administered_projects_on
     assert {row['project'] for row in rows} == {active_project, administered_project}
     assert all(row['consumed_tokens'] == 0 for row in rows)
     assert all(row['daily_token_limit'] == 100_000 for row in rows)
+    assert all(row['max_parallel_requests'] == 8 for row in rows)
+    assert b'Maximum concurrency' in response.content
+    assert b'8 requests' in response.content
 
 
 def test_staff_quota_dashboard_lists_all_projects(client, django_user_model):
@@ -209,6 +213,9 @@ def test_staff_quota_dashboard_lists_all_projects(client, django_user_model):
     assert response.status_code == 200
     rows = response.context['quota_rows']
     assert {row['project'] for row in rows} == {first, second}
+    first_row = next(row for row in rows if row['project'] == first)
+    assert first_row['max_parallel_requests'] is None
+    assert b'Not configured' in response.content
     assert response.context['admin_view'] is True
 
 

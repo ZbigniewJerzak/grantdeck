@@ -1,8 +1,11 @@
 import pytest
+from django.contrib import admin
 from django.contrib import messages
 from django.urls import reverse
 
+from apps.authz import admin as authz_admin
 from apps.authz.admin import ENVOY_POLICY_UPDATE_MESSAGE
+from apps.authz.kubernetes import PolicyDeploymentResult
 from apps.authz.models import ProjectLimitClass, ProjectModelLimit, Resource
 
 
@@ -40,7 +43,6 @@ def post_limit_class(client, policy_class=None, *, name=None, resources=(), rows
         data[f'model_limits-{index}-model_name'] = row.get('model_name', '')
         data[f'model_limits-{index}-daily_token_limit'] = str(row.get('daily_token_limit', ''))
         data[f'model_limits-{index}-max_parallel_requests'] = str(row.get('max_parallel_requests', ''))
-        data[f'model_limits-{index}-max_pending_requests'] = str(row.get('max_pending_requests', ''))
         if row.get('delete'):
             data[f'model_limits-{index}-DELETE'] = 'on'
 
@@ -55,7 +57,6 @@ def post_limit_class(client, policy_class=None, *, name=None, resources=(), rows
         data[f'model_limits-{index}-model_name'] = ''
         data[f'model_limits-{index}-daily_token_limit'] = ''
         data[f'model_limits-{index}-max_parallel_requests'] = ''
-        data[f'model_limits-{index}-max_pending_requests'] = ''
 
     return client.post(url, data)
 
@@ -104,7 +105,6 @@ def test_admin_warns_when_changing_model_limit(client, django_user_model):
             'model_name': model_limit.model_name,
             'daily_token_limit': 200_000,
             'max_parallel_requests': 12,
-            'max_pending_requests': 24,
         }],
     )
 
@@ -112,7 +112,96 @@ def test_admin_warns_when_changing_model_limit(client, django_user_model):
     model_limit.refresh_from_db()
     assert model_limit.daily_token_limit == 200_000
     assert model_limit.max_parallel_requests == 12
-    assert model_limit.max_pending_requests == 24
+    assert_policy_warning(response)
+
+
+def test_model_limit_has_dedicated_admin(client, django_user_model):
+    admin_user = django_user_model.objects.create_superuser(
+        username='admin', email='admin@example.test', password='password',
+    )
+    policy_class = ProjectLimitClass.objects.create(name='Research', slug='research')
+    model_limit = ProjectModelLimit.objects.create(
+        limit_class=policy_class,
+        model_name='bht/large',
+        daily_token_limit=100_000,
+        max_parallel_requests=16,
+    )
+    client.force_login(admin_user)
+
+    assert ProjectModelLimit in admin.site._registry
+    response = client.get(reverse('admin:authz_projectmodellimit_changelist'))
+
+    assert response.status_code == 200
+    assert b'bht/large' in response.content
+    assert b'Research' in response.content
+    assert b'Deploy all Envoy policies' in response.content
+
+
+def test_model_limit_admin_deploys_all_policies(client, django_user_model, monkeypatch):
+    admin_user = django_user_model.objects.create_superuser(
+        username='admin', email='admin@example.test', password='password',
+    )
+    calls = []
+    monkeypatch.setattr(
+        authz_admin,
+        'deploy_all_policies',
+        lambda **kwargs: calls.append(kwargs) or PolicyDeploymentResult(11, 2, 'grantdeck'),
+    )
+    client.force_login(admin_user)
+
+    response = client.post(reverse('admin:authz_projectmodellimit_deploy_policies'))
+
+    assert response.status_code == 302
+    assert calls == [{'actor': 'admin'}]
+    success_messages = [
+        str(message)
+        for message in admin_messages(response)
+        if message.level == messages.SUCCESS
+    ]
+    assert success_messages == [
+        'Deployed 11 Envoy policy resources in grantdeck; pruned 2 stale resources.'
+    ]
+
+
+def test_model_limit_admin_deployment_endpoint_is_post_only(client, django_user_model):
+    admin_user = django_user_model.objects.create_superuser(
+        username='admin', email='admin@example.test', password='password',
+    )
+    client.force_login(admin_user)
+
+    response = client.get(reverse('admin:authz_projectmodellimit_deploy_policies'))
+
+    assert response.status_code == 405
+
+
+def test_model_limit_admin_warns_when_changing_policy(client, django_user_model):
+    admin_user = django_user_model.objects.create_superuser(
+        username='admin', email='admin@example.test', password='password',
+    )
+    policy_class = ProjectLimitClass.objects.create(name='Research', slug='research')
+    model_limit = ProjectModelLimit.objects.create(
+        limit_class=policy_class,
+        model_name='bht/large',
+        daily_token_limit=100_000,
+        max_parallel_requests=16,
+    )
+    client.force_login(admin_user)
+
+    response = client.post(
+        reverse('admin:authz_projectmodellimit_change', args=[model_limit.pk]),
+        {
+            'limit_class': policy_class.pk,
+            'model_name': 'bht/large',
+            'daily_token_limit': 200_000,
+            'max_parallel_requests': 8,
+            '_save': 'Save',
+        },
+    )
+
+    assert response.status_code == 302
+    model_limit.refresh_from_db()
+    assert model_limit.daily_token_limit == 200_000
+    assert model_limit.max_parallel_requests == 8
     assert_policy_warning(response)
 
 

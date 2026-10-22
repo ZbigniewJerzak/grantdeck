@@ -10,6 +10,7 @@
           <th scope="col">Model</th>
           <th scope="col">Consumed today</th>
           <th scope="col">Daily limit</th>
+          <th scope="col">Maximum concurrency</th>
           <th scope="col">Resets</th>
         </tr>
       </thead>
@@ -26,6 +27,7 @@
             <td>{% if row.model_name %}<code>{{ row.model_name }}</code>{% else %}<span class="text-secondary">No model limits configured</span>{% endif %}</td>
             <td{% if row.consumed_tokens != None %} data-order="{{ row.consumed_tokens }}"{% endif %}>{% if row.consumed_tokens != None %}<span title="{{ row.consumed_tokens }} tokens">{{ row.consumed_tokens|token_number }} tokens</span>{% else %}<span class="text-secondary">Unavailable</span>{% endif %}</td>
             <td{% if row.daily_token_limit != None %} data-order="{{ row.daily_token_limit }}"{% endif %}>{% if row.daily_token_limit != None %}<span title="{{ row.daily_token_limit }} tokens per day">{{ row.daily_token_limit|token_number }} tokens</span>{% else %}<span class="text-secondary">—</span>{% endif %}</td>
+            <td{% if row.max_parallel_requests != None %} data-order="{{ row.max_parallel_requests }}"{% endif %}>{% if row.max_parallel_requests != None %}<span title="At most {{ row.max_parallel_requests }} parallel requests">{{ row.max_parallel_requests }} request{{ row.max_parallel_requests|pluralize }}</span>{% else %}<span class="text-secondary">Not configured</span>{% endif %}</td>
             <td>{% if row.reset_at %}{{ row.reset_at|date:"Y-m-d H:i T" }}{% else %}<span class="text-secondary">—</span>{% endif %}</td>
           </tr>
         {% endfor %}

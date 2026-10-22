@@ -1,11 +1,19 @@
-import json
-from pathlib import Path
-
 from django.conf import settings
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import CommandError
 
 from apps.authz.models import ProjectLimitClass
 from apps.authz.quota_keys import exported_route_name
+
+
+MANAGED_BY_LABEL = 'app.kubernetes.io/managed-by'
+MANAGED_BY_VALUE = 'grantdeck-export'
+
+
+def managed_metadata(name):
+    return {
+        'name': name,
+        'labels': {MANAGED_BY_LABEL: MANAGED_BY_VALUE},
+    }
 
 
 def route_document(policy_class, model_limit):
@@ -19,10 +27,7 @@ def route_document(policy_class, model_limit):
     return {
         'apiVersion': 'aigateway.envoyproxy.io/v1beta1',
         'kind': 'AIGatewayRoute',
-        'metadata': {
-            'name': name,
-            'labels': {'app.kubernetes.io/managed-by': 'grantdeck-export'},
-        },
+        'metadata': managed_metadata(name),
         'spec': {
             'parentRefs': [{
                 'group': 'gateway.networking.k8s.io',
@@ -66,10 +71,7 @@ def quota_document(policy_class, model_limit):
     document = {
         'apiVersion': 'gateway.envoyproxy.io/v1alpha1',
         'kind': 'BackendTrafficPolicy',
-        'metadata': {
-            'name': f'{target_name}-quota',
-            'labels': {'app.kubernetes.io/managed-by': 'grantdeck-export'},
-        },
+        'metadata': managed_metadata(f'{target_name}-quota'),
         'spec': {
             'targetRefs': [{
                 'group': 'gateway.networking.k8s.io',
@@ -105,16 +107,10 @@ def quota_document(policy_class, model_limit):
             },
         },
     }
-    circuit_breaker = {
-        field: value
-        for field, value in (
-            ('maxParallelRequests', model_limit.max_parallel_requests),
-            ('maxPendingRequests', model_limit.max_pending_requests),
-        )
-        if value is not None
-    }
-    if circuit_breaker:
-        document['spec']['circuitBreaker'] = circuit_breaker
+    if model_limit.max_parallel_requests is not None:
+        document['spec']['circuitBreaker'] = {
+            'maxParallelRequests': model_limit.max_parallel_requests,
+        }
     return document
 
 
@@ -122,10 +118,7 @@ def security_policy_document(route_names):
     return {
         'apiVersion': 'gateway.envoyproxy.io/v1alpha1',
         'kind': 'SecurityPolicy',
-        'metadata': {
-            'name': 'inference-grantdeck-class-auth',
-            'labels': {'app.kubernetes.io/managed-by': 'grantdeck-export'},
-        },
+        'metadata': managed_metadata('inference-grantdeck-class-auth'),
         'spec': {
             'targetRefs': [
                 {
@@ -155,69 +148,18 @@ def security_policy_document(route_names):
     }
 
 
-class Command(BaseCommand):
-    help = 'Export class/model AIGateway resources as separate YAML-compatible JSON files.'
+def build_policy_documents():
+    policy_classes = list(
+        ProjectLimitClass.objects.order_by('pk').prefetch_related('model_limits')
+    )
+    documents = []
+    route_names = []
+    for policy_class in policy_classes:
+        for model_limit in policy_class.model_limits.all():
+            route = route_document(policy_class, model_limit)
+            documents.extend([route, quota_document(policy_class, model_limit)])
+            route_names.append(route['metadata']['name'])
 
-    def add_arguments(self, parser):
-        parser.add_argument(
-            '--output-dir',
-            type=Path,
-            help='Write one resource file per Kubernetes object to this directory.',
-        )
-
-    def export_documents(self):
-        policy_classes = list(
-            ProjectLimitClass.objects.order_by('pk').prefetch_related('model_limits')
-        )
-        documents = []
-        route_names = []
-        for policy_class in policy_classes:
-            for model_limit in policy_class.model_limits.all():
-                route = route_document(policy_class, model_limit)
-                documents.extend([route, quota_document(policy_class, model_limit)])
-                route_names.append(route['metadata']['name'])
-
-        if route_names:
-            documents.append(security_policy_document(route_names))
-        return documents
-
-    def write_directory(self, output_dir, documents):
-        output_dir.mkdir(parents=True, exist_ok=True)
-        marker = output_dir / '.grantdeck-export'
-        existing_files = [path for path in output_dir.iterdir() if path != marker]
-        if existing_files and not marker.exists():
-            raise CommandError(
-                f'Output directory {str(output_dir)!r} must be empty except for .grantdeck-export.'
-            )
-        if any(not path.is_file() or path.suffix != '.yml' for path in existing_files):
-            raise CommandError(
-                f'Output directory {str(output_dir)!r} contains unmanaged files.'
-            )
-        for path in existing_files:
-            path.unlink()
-        marker.touch()
-        for document in documents:
-            resource_name = document['metadata']['name']
-            output_file = output_dir / f'{resource_name}.yml'
-            output_file.write_text(
-                json.dumps(document, indent=2, ensure_ascii=False) + '\n',
-                encoding='utf-8',
-            )
-
-    def handle(self, *args, **options):
-        documents = self.export_documents()
-        output_dir = options.get('output_dir')
-
-        if output_dir is not None:
-            self.write_directory(Path(output_dir), documents)
-            return
-
-        if not documents:
-            self.stdout.write('# No project model limits are configured.')
-            return
-
-        self.stdout.write('---')
-        for index, document in enumerate(documents):
-            if index:
-                self.stdout.write('---')
-            self.stdout.write(json.dumps(document, indent=2, ensure_ascii=False))
+    if route_names:
+        documents.append(security_policy_document(route_names))
+    return documents

@@ -1,0 +1,168 @@
+import logging
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from time import monotonic
+
+from django.db import connection
+
+from apps.authz.policies import MANAGED_BY_LABEL, MANAGED_BY_VALUE, build_policy_documents
+
+
+logger = logging.getLogger('apps.authz')
+
+FIELD_MANAGER = 'grantdeck-policy-deployer'
+LOCK_ID = 0x4752444B
+NAMESPACE_FILE = Path('/var/run/secrets/kubernetes.io/serviceaccount/namespace')
+RESOURCE_TYPES = {
+    'AIGatewayRoute': ('aigateway.envoyproxy.io', 'v1beta1', 'aigatewayroutes'),
+    'BackendTrafficPolicy': ('gateway.envoyproxy.io', 'v1alpha1', 'backendtrafficpolicies'),
+    'SecurityPolicy': ('gateway.envoyproxy.io', 'v1alpha1', 'securitypolicies'),
+}
+APPLY_ORDER = {'AIGatewayRoute': 0, 'BackendTrafficPolicy': 1, 'SecurityPolicy': 2}
+PRUNE_ORDER = ('SecurityPolicy', 'BackendTrafficPolicy', 'AIGatewayRoute')
+REQUEST_TIMEOUT = (5, 30)
+
+
+class PolicyDeploymentError(Exception):
+    pass
+
+
+class PolicyDeploymentInProgress(PolicyDeploymentError):
+    pass
+
+
+@dataclass(frozen=True)
+class PolicyDeploymentResult:
+    applied: int
+    pruned: int
+    namespace: str
+
+
+def _load_kubernetes_client():
+    try:
+        from kubernetes import client, config
+
+        config.load_incluster_config()
+        return client.CustomObjectsApi()
+    except Exception as exc:
+        raise PolicyDeploymentError('In-cluster Kubernetes credentials are unavailable.') from exc
+
+
+def _namespace():
+    try:
+        namespace = NAMESPACE_FILE.read_text(encoding='utf-8').strip()
+    except OSError as exc:
+        raise PolicyDeploymentError('The pod namespace could not be determined.') from exc
+    if not namespace:
+        raise PolicyDeploymentError('The pod namespace is empty.')
+    return namespace
+
+
+@contextmanager
+def deployment_lock():
+    if connection.vendor != 'postgresql':
+        yield
+        return
+
+    with connection.cursor() as cursor:
+        cursor.execute('SELECT pg_try_advisory_lock(%s)', [LOCK_ID])
+        acquired = cursor.fetchone()[0]
+    if not acquired:
+        raise PolicyDeploymentInProgress('Another policy deployment is already running.')
+    try:
+        yield
+    finally:
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT pg_advisory_unlock(%s)', [LOCK_ID])
+
+
+def _apply(api, namespace, document):
+    group, version, plural = RESOURCE_TYPES[document['kind']]
+    api.api_client.call_api(
+        '/apis/{group}/{version}/namespaces/{namespace}/{plural}/{name}',
+        'PATCH',
+        path_params={
+            'group': group,
+            'version': version,
+            'namespace': namespace,
+            'plural': plural,
+            'name': document['metadata']['name'],
+        },
+        query_params=[('fieldManager', FIELD_MANAGER), ('force', False)],
+        header_params={
+            'Accept': 'application/json',
+            'Content-Type': 'application/apply-patch+yaml',
+        },
+        body=document,
+        response_type='object',
+        auth_settings=['BearerToken'],
+        _return_http_data_only=True,
+        _request_timeout=REQUEST_TIMEOUT,
+    )
+
+
+def _prune(api, namespace, desired):
+    pruned = 0
+    label_selector = f'{MANAGED_BY_LABEL}={MANAGED_BY_VALUE}'
+    for kind in PRUNE_ORDER:
+        group, version, plural = RESOURCE_TYPES[kind]
+        response = api.list_namespaced_custom_object(
+            group=group,
+            version=version,
+            namespace=namespace,
+            plural=plural,
+            label_selector=label_selector,
+            _request_timeout=REQUEST_TIMEOUT,
+        )
+        for item in response.get('items', []):
+            name = item.get('metadata', {}).get('name')
+            if name and (kind, name) not in desired:
+                api.delete_namespaced_custom_object(
+                    group=group,
+                    version=version,
+                    namespace=namespace,
+                    plural=plural,
+                    name=name,
+                    _request_timeout=REQUEST_TIMEOUT,
+                )
+                pruned += 1
+    return pruned
+
+
+def deploy_all_policies(*, actor):
+    started = monotonic()
+    with deployment_lock():
+        try:
+            documents = build_policy_documents()
+            namespace = _namespace()
+            api = _load_kubernetes_client()
+            desired = {
+                (document['kind'], document['metadata']['name'])
+                for document in documents
+            }
+            for document in sorted(documents, key=lambda item: APPLY_ORDER[item['kind']]):
+                _apply(api, namespace, document)
+            pruned = _prune(api, namespace, desired)
+        except PolicyDeploymentError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                'Kubernetes policy deployment failed actor=%s',
+                actor,
+            )
+            raise PolicyDeploymentError('Kubernetes rejected the policy deployment.') from exc
+
+    logger.info(
+        'Kubernetes policy deployment succeeded actor=%s namespace=%s applied=%s pruned=%s duration=%.3f',
+        actor,
+        namespace,
+        len(documents),
+        pruned,
+        monotonic() - started,
+    )
+    return PolicyDeploymentResult(
+        applied=len(documents),
+        pruned=pruned,
+        namespace=namespace,
+    )

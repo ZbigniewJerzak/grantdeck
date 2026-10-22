@@ -47,6 +47,7 @@ def usage_rows_for_projects(projects, *, user=None, include_all_users=False):
                     'model_name': None,
                     'consumed_tokens': None,
                     'daily_token_limit': None,
+                    'max_parallel_requests': None,
                     'reset_at': None,
                 })
                 continue
@@ -58,6 +59,7 @@ def usage_rows_for_projects(projects, *, user=None, include_all_users=False):
                     'model_name': model_limit.model_name,
                     'consumed_tokens': usage.get((username, project.pk, model_limit.model_name), 0),
                     'daily_token_limit': model_limit.daily_token_limit,
+                    'max_parallel_requests': model_limit.max_parallel_requests,
                     'reset_at': reset_at,
                 })
     return rows

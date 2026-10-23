@@ -110,7 +110,10 @@ def quota_document(policy_class, model_limit):
     if model_limit.max_parallel_requests is not None:
         document['spec']['circuitBreaker'] = {
             'maxParallelRequests': model_limit.max_parallel_requests,
-            'maxPendingRequests': 0,
+            # Envoy counts requests waiting for a new upstream connection as
+            # pending. A zero limit can therefore deadlock a cold or rebuilt
+            # cluster before its first connection is established.
+            'maxPendingRequests': model_limit.max_parallel_requests,
         }
     return document
 

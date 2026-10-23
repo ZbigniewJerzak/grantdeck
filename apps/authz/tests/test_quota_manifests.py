@@ -68,7 +68,7 @@ def test_export_generates_class_model_routes_quota_and_auth_resources():
     assert rule['cost']['response']['metadata']['key'] == 'llm_total_token'
     assert quota['spec']['circuitBreaker'] == {
         'maxParallelRequests': 16,
-        'maxPendingRequests': 0,
+        'maxPendingRequests': 16,
     }
     assert security['spec']['targetRefs'] == [{
         'group': 'gateway.networking.k8s.io',

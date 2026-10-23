@@ -15,7 +15,7 @@ GDK_ENV_VARS = [
     'GDK_SECRET_KEY',
     'GDK_DATABASE_URL',
     'GDK_ALLOWED_HOSTS',
-    'GDK_AUTHZ_CANONICAL_ORIGIN',
+    'GDK_AUTHZ_API_ENDPOINT',
     'GDK_OIDC_ENDPOINT',
     'GDK_OIDC_CLIENT_ID',
     'GDK_OIDC_CLIENT_SECRET',
@@ -34,7 +34,7 @@ PRODUCTION_ENV = {
     'GDK_SECRET_KEY': 'production-secret',
     'GDK_DATABASE_URL': 'postgres://user:pass@db.example:5432/grantdeck',
     'GDK_ALLOWED_HOSTS': 'grantdeck.example.test,grantdeck.internal',
-    'GDK_AUTHZ_CANONICAL_ORIGIN': 'https://grantdeck.example.test/',
+    'GDK_AUTHZ_API_ENDPOINT': 'https://api.example.test/v1/',
     'GDK_OIDC_ENDPOINT': 'https://issuer.example.test',
     'GDK_OIDC_CLIENT_ID': 'client-id',
     'GDK_OIDC_CLIENT_SECRET': 'client-secret',
@@ -82,7 +82,7 @@ def test_production_settings_load_with_required_environment(monkeypatch):
     assert loaded.DEBUG is False
     assert loaded.SECRET_KEY == 'production-secret'
     assert loaded.ALLOWED_HOSTS == ['grantdeck.example.test', 'grantdeck.internal']
-    assert loaded.AUTHZ_CANONICAL_ORIGIN == 'https://grantdeck.example.test'
+    assert loaded.AUTHZ_API_ENDPOINT == 'https://api.example.test/v1'
     assert loaded.DATABASES['default']['ENGINE'] == 'django.db.backends.postgresql'
     assert loaded.SOCIAL_AUTH_OIDC_KEY == 'client-id'
     assert loaded.SOCIAL_AUTH_OIDC_TOKEN_ENDPOINT_AUTH_METHOD == 'client_secret_post'
@@ -104,6 +104,22 @@ def test_development_settings_keep_local_defaults(monkeypatch):
     assert loaded.DATABASES['default']['ENGINE'] == 'django.db.backends.sqlite3'
     assert loaded.DATABASES['default']['NAME'] == str(loaded.BASE_DIR / 'db.sqlite3')
     assert loaded.FORCE_SCRIPT_NAME is None
+    assert loaded.AUTHZ_API_ENDPOINT == 'http://testserver/'
+
+
+@pytest.mark.parametrize('endpoint', [
+    'api.example.test/v1',
+    'ftp://api.example.test/v1',
+    'https://user:secret@api.example.test/v1',
+    'https://api.example.test/v1?key=value',
+    'https://api.example.test/v1#fragment',
+])
+def test_api_endpoint_must_be_a_plain_absolute_http_url(monkeypatch, endpoint):
+    with pytest.raises(ImproperlyConfigured, match='GDK_AUTHZ_API_ENDPOINT'):
+        reload_settings(
+            monkeypatch,
+            **(PRODUCTION_ENV | {'GDK_AUTHZ_API_ENDPOINT': endpoint}),
+        )
 
 
 def test_log_level_can_enable_request_debug_logs(monkeypatch):

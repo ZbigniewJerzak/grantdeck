@@ -1,7 +1,7 @@
 import logging
+from urllib.parse import urlsplit, urlunsplit
 
 from django.conf import settings
-from django.core.exceptions import ValidationError
 from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 
@@ -61,11 +61,24 @@ def _unauthorized_response():
     return response
 
 
-def _protected_url(request, protected_path):
+def _protected_url(protected_path):
     path = f'/{protected_path}' if protected_path else '/'
-    if settings.AUTHZ_CANONICAL_ORIGIN:
-        return f'{settings.AUTHZ_CANONICAL_ORIGIN}{path}'
-    return request.build_absolute_uri(path)
+    endpoint = urlsplit(settings.AUTHZ_API_ENDPOINT)
+    return urlunsplit((endpoint.scheme, endpoint.netloc, path, '', ''))
+
+
+def _matches_api_endpoint(url):
+    endpoint = urlsplit(settings.AUTHZ_API_ENDPOINT)
+    candidate = urlsplit(url)
+    if (candidate.scheme, candidate.netloc) != (endpoint.scheme, endpoint.netloc):
+        return False
+    endpoint_path = endpoint.path.rstrip('/') or '/'
+    candidate_path = candidate.path.rstrip('/') or '/'
+    return (
+        endpoint_path == '/'
+        or candidate_path == endpoint_path
+        or candidate_path.startswith(f'{endpoint_path}/')
+    )
 
 
 @csrf_exempt
@@ -87,17 +100,13 @@ def envoy_authz_check(request, protected_path=''):
         return HttpResponse(status=403)
 
     username = token.user.get_username()
-    protected_url = _protected_url(request, protected_path)
-    try:
-        resource = token.project.resource_for_url(protected_url)
-    except ValidationError:
-        resource = None
-    if resource is None:
+    protected_url = _protected_url(protected_path)
+    if token.project.limit_class_id is None or not _matches_api_endpoint(protected_url):
         token.record_denied()
         _log_authz(request, 403, 'forbidden', username, protected_url=protected_url)
         return HttpResponse(status=403)
 
-    token.record_allowed(resource)
+    token.record_allowed()
     _log_authz(request, 200, 'allowed', username, protected_url)
     response = HttpResponse(status=200)
     response['x-current-user'] = username

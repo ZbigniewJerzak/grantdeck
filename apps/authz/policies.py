@@ -110,6 +110,7 @@ def quota_document(policy_class, model_limit):
     if model_limit.max_parallel_requests is not None:
         document['spec']['circuitBreaker'] = {
             'maxParallelRequests': model_limit.max_parallel_requests,
+            'maxPendingRequests': 0,
         }
     return document
 

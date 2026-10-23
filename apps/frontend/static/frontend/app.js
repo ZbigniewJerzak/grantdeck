@@ -22,10 +22,13 @@ document.querySelectorAll('.js-data-table').forEach((table) => {
   new window.DataTable(table, {
     pageLength: Number(table.dataset.pageLength || 25),
     lengthMenu: [10, 25, 50, 100],
-    order: [[0, 'asc']],
+    order: [[
+      Number(table.dataset.orderColumn || 0),
+      table.dataset.orderDirection || 'asc',
+    ]],
     columnDefs: [
-      { targets: [3, 4], type: 'num' },
-      { targets: 5, type: 'date' },
+      { targets: [4, 5, 6], type: 'num' },
+      { targets: 7, type: 'date' },
     ],
     language: {
       search: 'Filter projects:',

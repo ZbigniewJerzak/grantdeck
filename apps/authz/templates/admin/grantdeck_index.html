@@ -1,0 +1,23 @@
+{% extends "admin/index.html" %}
+
+{% block content %}
+  {% if user.is_superuser %}
+    <div class="module" id="envoy-policy-deployment">
+      <table>
+        <caption>Envoy policies</caption>
+        <tbody>
+          <tr>
+            <th scope="row">Apply the current model limits to Envoy.</th>
+            <td>
+              <form method="post" action="{% url 'admin:authz_projectmodellimit_deploy_policies' %}">
+                {% csrf_token %}
+                <button type="submit">Deploy all Envoy policies</button>
+              </form>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+  {{ block.super }}
+{% endblock %}

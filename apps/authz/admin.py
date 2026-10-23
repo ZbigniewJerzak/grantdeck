@@ -1,7 +1,9 @@
 from django import forms
 from django.contrib import admin
 from django.contrib import messages
+from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.models import Group
+from django.contrib.auth.models import User
 from django.core.exceptions import PermissionDenied
 from django.db.models import Count
 from django.http import HttpResponseNotAllowed
@@ -14,7 +16,6 @@ from apps.authz.models import (
     ProjectLimitClass,
     ProjectMembership,
     ProjectModelLimit,
-    Resource,
     StaticToken,
 )
 from apps.authz.kubernetes import (
@@ -24,7 +25,8 @@ from apps.authz.kubernetes import (
 )
 
 
-admin.site.unregister([Group, UserSocialAuth, Nonce, Association])
+admin.site.unregister([Group, User, UserSocialAuth, Nonce, Association])
+admin.site.index_template = 'admin/grantdeck_index.html'
 
 
 ENVOY_POLICY_UPDATE_MESSAGE = (
@@ -82,6 +84,18 @@ class SuperuserOnlyAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return request.user.is_superuser
+
+
+@admin.register(User)
+class GrantDeckUserAdmin(UserAdmin):
+    list_display = (*UserAdmin.list_display, 'project_names')
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related('projects')
+
+    @admin.display(description='Projects')
+    def project_names(self, user):
+        return ', '.join(project.name for project in user.projects.all()) or '-'
 
 
 class ProjectScopedAdmin(admin.ModelAdmin):
@@ -171,7 +185,6 @@ class ProjectAdmin(ProjectScopedAdmin):
 class ProjectLimitClassAdmin(SuperuserOnlyAdmin):
     list_display = ['name', 'slug', 'project_count', 'model_count']
     search_fields = ['name', 'slug']
-    filter_horizontal = ['resources']
     inlines = [ProjectModelLimitInline]
 
     def save_related(self, request, form, formsets, change):
@@ -223,10 +236,10 @@ class ProjectLimitClassAdmin(SuperuserOnlyAdmin):
 
 @admin.register(ProjectModelLimit)
 class ProjectModelLimitAdmin(SuperuserOnlyAdmin):
-    change_list_template = 'admin/authz/projectmodellimit/change_list.html'
     list_display = [
         'model_name',
         'limit_class',
+        'project_count',
         'daily_token_limit',
         'max_parallel_requests',
     ]
@@ -234,6 +247,15 @@ class ProjectModelLimitAdmin(SuperuserOnlyAdmin):
     search_fields = ['model_name', 'limit_class__name', 'limit_class__slug']
     autocomplete_fields = ['limit_class']
     list_select_related = ['limit_class']
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).annotate(
+            project_count_value=Count('limit_class__projects', distinct=True),
+        )
+
+    @admin.display(description='Projects', ordering='project_count_value')
+    def project_count(self, model_limit):
+        return model_limit.project_count_value
 
     def get_urls(self):
         custom_urls = [
@@ -291,12 +313,6 @@ class ProjectModelLimitAdmin(SuperuserOnlyAdmin):
             ENVOY_POLICY_UPDATE_MESSAGE,
             level=messages.WARNING,
         )
-
-
-@admin.register(Resource)
-class ResourceAdmin(SuperuserOnlyAdmin):
-    list_display = ['url', 'description']
-    search_fields = ['url', 'description']
 
 
 @admin.register(ProjectMembership)

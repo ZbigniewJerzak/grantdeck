@@ -7,7 +7,7 @@
       </li>
       {% if show_quota_admin_link %}
         <li class="nav-item">
-          <a class="nav-link{% if active_nav == 'quota_usage' %} active{% endif %}" {% if active_nav == 'quota_usage' %}aria-current="page"{% endif %} href="{% url 'admin_quota_usage' %}">Quota Administration</a>
+          <a class="nav-link{% if active_nav == 'quota_usage' %} active{% endif %}" {% if active_nav == 'quota_usage' %}aria-current="page"{% endif %} href="{% url 'admin_quota_usage' %}">Monitoring</a>
         </li>
       {% endif %}
       {% if show_admin_link %}

@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import dj_database_url
 from django.contrib.messages import constants as message_constants
@@ -42,6 +43,29 @@ def env_json(name, default=None, required=False):
     return parsed
 
 
+def api_endpoint():
+    value = env(
+        'GDK_AUTHZ_API_ENDPOINT',
+        'http://testserver/' if IS_DEVELOPMENT else None,
+        required=REQUIRE_PRODUCTION_ENV,
+    )
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme not in {'http', 'https'}
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ImproperlyConfigured(
+            'GDK_AUTHZ_API_ENDPOINT must be an absolute HTTP(S) URL without '
+            'credentials, a query, or a fragment.'
+        )
+    path = parsed.path.rstrip('/') or '/'
+    return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), path, '', ''))
+
+
 def aigateway_model_backends():
     backends = env_json('GDK_AIGATEWAY_MODEL_BACKENDS', required=REQUIRE_PRODUCTION_ENV)
     for model_name, backend in backends.items():
@@ -81,11 +105,7 @@ DEBUG = IS_DEVELOPMENT
 ALLOWED_HOSTS = env_csv('GDK_ALLOWED_HOSTS', required=REQUIRE_PRODUCTION_ENV)
 CSRF_TRUSTED_ORIGINS = env_csv('GDK_CSRF_TRUSTED_ORIGINS')
 FORCE_SCRIPT_NAME = env('GDK_SCRIPT_NAME') or None
-AUTHZ_CANONICAL_ORIGIN = env(
-    'GDK_AUTHZ_CANONICAL_ORIGIN',
-    '' if IS_DEVELOPMENT else None,
-    required=REQUIRE_PRODUCTION_ENV,
-).rstrip('/')
+AUTHZ_API_ENDPOINT = api_endpoint()
 
 BRAND_NAME = env('GDK_BRAND_NAME', 'GrantDeck')
 SSO_LOGIN_BUTTON_TEXT = env('GDK_SSO_LOGIN_BUTTON_TEXT', 'Login with SSO')

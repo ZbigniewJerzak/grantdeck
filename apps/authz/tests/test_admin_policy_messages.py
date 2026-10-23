@@ -6,7 +6,12 @@ from django.urls import reverse
 from apps.authz import admin as authz_admin
 from apps.authz.admin import ENVOY_POLICY_UPDATE_MESSAGE
 from apps.authz.kubernetes import PolicyDeploymentResult
-from apps.authz.models import ProjectLimitClass, ProjectModelLimit, Resource
+from apps.authz.models import (
+    Project,
+    ProjectLimitClass,
+    ProjectMembership,
+    ProjectModelLimit,
+)
 
 
 pytestmark = pytest.mark.django_db
@@ -16,7 +21,7 @@ def admin_messages(response):
     return list(response.wsgi_request._messages)
 
 
-def post_limit_class(client, policy_class=None, *, name=None, resources=(), rows=()):
+def post_limit_class(client, policy_class=None, *, name=None, rows=()):
     existing = list(policy_class.model_limits.order_by('model_name')) if policy_class else []
     url = (
         reverse('admin:authz_projectlimitclass_change', args=[policy_class.pk])
@@ -26,7 +31,6 @@ def post_limit_class(client, policy_class=None, *, name=None, resources=(), rows
     data = {
         'name': name or (policy_class.name if policy_class else 'Research'),
         'slug': policy_class.slug if policy_class else 'research',
-        'resources': [str(resource.pk) for resource in resources],
         'model_limits-TOTAL_FORMS': str(max(len(existing), len(rows))),
         'model_limits-INITIAL_FORMS': str(len(existing)),
         'model_limits-MIN_NUM_FORMS': '0',
@@ -68,6 +72,24 @@ def assert_policy_warning(response):
 
 def assert_no_policy_warning(response):
     assert not any(message.level == messages.WARNING for message in admin_messages(response))
+
+
+def test_user_admin_lists_project_names(client, django_user_model):
+    admin_user = django_user_model.objects.create_superuser(
+        username='admin', email='admin@example.test', password='password',
+    )
+    user = django_user_model.objects.create_user(username='researcher')
+    first = Project.objects.create(name='First Project', shortcut='first')
+    second = Project.objects.create(name='Second Project', shortcut='second')
+    ProjectMembership.objects.create(user=user, project=first)
+    ProjectMembership.objects.create(user=user, project=second)
+    client.force_login(admin_user)
+
+    response = client.get(reverse('admin:auth_user_changelist'))
+
+    assert response.status_code == 200
+    assert b'Projects' in response.content
+    assert b'First Project, Second Project' in response.content
 
 
 def test_admin_warns_when_adding_model_limit(client, django_user_model):
@@ -126,6 +148,8 @@ def test_model_limit_has_dedicated_admin(client, django_user_model):
         daily_token_limit=100_000,
         max_parallel_requests=16,
     )
+    Project.objects.create(name='First', shortcut='first', limit_class=policy_class)
+    Project.objects.create(name='Second', shortcut='second', limit_class=policy_class)
     client.force_login(admin_user)
 
     assert ProjectModelLimit in admin.site._registry
@@ -134,7 +158,35 @@ def test_model_limit_has_dedicated_admin(client, django_user_model):
     assert response.status_code == 200
     assert b'bht/large' in response.content
     assert b'Research' in response.content
+    assert b'Projects' in response.content
+    assert response.context['cl'].result_list[0].project_count_value == 2
+    assert b'Deploy all Envoy policies' not in response.content
+
+    response = client.get(reverse('admin:index'))
+
+    assert response.status_code == 200
     assert b'Deploy all Envoy policies' in response.content
+    assert reverse('admin:authz_projectmodellimit_deploy_policies').encode() in response.content
+
+
+def test_model_limit_admin_explains_parallel_limit_scope(client, django_user_model):
+    admin_user = django_user_model.objects.create_superuser(
+        username='admin', email='admin@example.test', password='password',
+    )
+    policy_class = ProjectLimitClass.objects.create(name='Research', slug='research')
+    model_limit = ProjectModelLimit.objects.create(
+        limit_class=policy_class,
+        model_name='bht/large',
+        daily_token_limit=100_000,
+    )
+    client.force_login(admin_user)
+
+    response = client.get(
+        reverse('admin:authz_projectmodellimit_change', args=[model_limit.pk]),
+    )
+
+    assert response.status_code == 200
+    assert b'counted separately for each Envoy pod' in response.content
 
 
 def test_model_limit_admin_deploys_all_policies(client, django_user_model, monkeypatch):
@@ -251,19 +303,17 @@ def test_admin_warns_when_deleting_class_with_model_limits(client, django_user_m
     assert_policy_warning(response)
 
 
-def test_admin_does_not_warn_for_class_name_or_resource_changes(client, django_user_model):
+def test_admin_does_not_warn_for_class_name_change(client, django_user_model):
     admin_user = django_user_model.objects.create_superuser(
         username='admin', email='admin@example.test', password='password',
     )
     policy_class = ProjectLimitClass.objects.create(name='Research', slug='research')
-    resource = Resource.objects.create(url='https://example.test/v1')
     client.force_login(admin_user)
 
     response = post_limit_class(
         client,
         policy_class,
         name='Research access',
-        resources=[resource],
     )
 
     assert response.status_code == 302

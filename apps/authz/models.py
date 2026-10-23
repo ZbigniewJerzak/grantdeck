@@ -1,12 +1,11 @@
 import hmac
 import secrets
 from datetime import timedelta
-from urllib.parse import urlsplit, urlunsplit
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator, RegexValidator
-from django.db import IntegrityError, models
+from django.db import models
 from django.utils import timezone
 
 
@@ -39,7 +38,6 @@ class ProjectLimitClass(models.Model):
         unique=True,
         validators=[PROJECT_QUOTA_CLASS_SLUG_VALIDATOR],
     )
-    resources = models.ManyToManyField('Resource', blank=True, related_name='limit_classes')
 
     class Meta:
         ordering = ['name']
@@ -55,15 +53,6 @@ class ProjectLimitClass(models.Model):
             if previous_slug and self.slug != previous_slug:
                 raise ValidationError({'slug': 'A project limit class slug is immutable.'})
         super().save(*args, **kwargs)
-
-    def resource_for_url(self, url):
-        resource_urls = Resource.matching_urls(url)
-        return (
-            self.resources.filter(url__in=resource_urls)
-            .order_by('-url')
-            .first()
-        )
-
 
 class Project(models.Model):
     name = models.CharField(max_length=120)
@@ -96,11 +85,6 @@ class Project(models.Model):
         through='ProjectMembership',
         related_name='projects',
     )
-    resources = models.ManyToManyField(
-        'Resource',
-        through='ProjectResource',
-        related_name='projects',
-    )
     class Meta:
         ordering = ['name']
 
@@ -119,14 +103,6 @@ class Project(models.Model):
     @property
     def is_active(self):
         return self.end_date is None or self.end_date >= timezone.localdate()
-
-    def resource_for_url(self, url):
-        if self.limit_class_id is None:
-            return None
-        return self.limit_class.resource_for_url(url)
-
-    def allows_url(self, url):
-        return self.resource_for_url(url) is not None
 
     def quota_limit_for_model(self, model_name):
         if self.limit_class_id is None:
@@ -239,58 +215,6 @@ class ProjectMembership(models.Model):
         return StaticToken.active_for_user(self.user).filter(project=self.project)
 
 
-class Resource(models.Model):
-    url = models.URLField(unique=True)
-    description = models.TextField(blank=True)
-
-    class Meta:
-        ordering = ['url']
-
-    def __str__(self):
-        return self.url
-
-    def clean(self):
-        self.url = self.normalize_url(self.url)
-
-    def save(self, *args, **kwargs):
-        self.url = self.normalize_url(self.url)
-        super().save(*args, **kwargs)
-
-    @classmethod
-    def normalize_url(cls, url):
-        parsed = urlsplit(url)
-        if not parsed.scheme or not parsed.hostname:
-            raise ValidationError({'url': 'Enter an absolute URL.'})
-
-        netloc = parsed.hostname.lower()
-        if parsed.port:
-            netloc = f'{netloc}:{parsed.port}'
-
-        path = parsed.path or '/'
-        if path != '/':
-            path = path.rstrip('/')
-
-        return urlunsplit((parsed.scheme.lower(), netloc, path, '', ''))
-
-    @classmethod
-    def matching_urls(cls, url):
-        normalized = cls.normalize_url(url)
-        parsed = urlsplit(normalized)
-        path = parsed.path
-        paths = []
-
-        while path:
-            paths.append(path)
-            if path == '/':
-                break
-            path = path.rsplit('/', 1)[0] or '/'
-
-        return [urlunsplit((parsed.scheme, parsed.netloc, candidate, '', '')) for candidate in paths]
-
-    def matches_url(self, url):
-        return self.url in self.matching_urls(url)
-
-
 class ProjectModelLimit(models.Model):
     limit_class = models.ForeignKey(
         ProjectLimitClass,
@@ -303,7 +227,10 @@ class ProjectModelLimit(models.Model):
         blank=True,
         null=True,
         validators=[MinValueValidator(1)],
-        help_text='Maximum number of requests Envoy may send to this model at once.',
+        help_text=(
+            'Maximum number of requests Envoy may send to this model at once, '
+            'counted separately for each Envoy pod.'
+        ),
     )
     class Meta:
         ordering = ['model_name']
@@ -324,20 +251,6 @@ class ProjectModelLimit(models.Model):
 
     def __str__(self):
         return f'{self.limit_class}: {self.model_name} ({self.daily_token_limit}/day)'
-
-
-class ProjectResource(models.Model):
-    project = models.ForeignKey(Project, on_delete=models.CASCADE)
-    resource = models.ForeignKey(Resource, on_delete=models.CASCADE)
-
-    class Meta:
-        ordering = ['project', 'resource']
-        constraints = [
-            models.UniqueConstraint(fields=['project', 'resource'], name='unique_project_resource'),
-        ]
-
-    def __str__(self):
-        return f'{self.project}: {self.resource}'
 
 
 class StaticToken(models.Model):
@@ -401,7 +314,7 @@ class StaticToken(models.Model):
         return (
             cls.objects
             .filter(cls.active_filter(), token_hash=cls.hash_token(raw_token))
-            .select_related('user', 'project')
+            .select_related('user', 'project', 'project__limit_class')
             .first()
         )
 
@@ -409,45 +322,12 @@ class StaticToken(models.Model):
     def active_for_user(cls, user):
         return cls.objects.filter(cls.active_filter(), user=user).select_related('project')
 
-    def record_allowed(self, resource):
+    def record_allowed(self):
         StaticToken.objects.filter(pk=self.pk).update(
             allowed_count=models.F('allowed_count') + 1,
         )
-        TokenResourceUsage.record_allowed(self, resource)
 
     def record_denied(self):
         StaticToken.objects.filter(pk=self.pk).update(
             denied_count=models.F('denied_count') + 1,
         )
-
-
-class TokenResourceUsage(models.Model):
-    token = models.ForeignKey(StaticToken, on_delete=models.CASCADE, related_name='resource_usage')
-    resource = models.ForeignKey(Resource, on_delete=models.CASCADE, related_name='token_usage')
-    allowed_count = models.PositiveBigIntegerField(default=0)
-
-    class Meta:
-        ordering = ['resource__url']
-        constraints = [
-            models.UniqueConstraint(fields=['token', 'resource'], name='unique_token_resource_usage'),
-        ]
-        verbose_name = 'Bearer token resource usage'
-        verbose_name_plural = 'Bearer token resource usage'
-
-    def __str__(self):
-        return f'{self.token}: {self.resource}'
-
-    @classmethod
-    def record_allowed(cls, token, resource):
-        updated = cls.objects.filter(token=token, resource=resource).update(
-            allowed_count=models.F('allowed_count') + 1,
-        )
-        if updated:
-            return
-
-        try:
-            cls.objects.create(token=token, resource=resource, allowed_count=1)
-        except IntegrityError:
-            cls.objects.filter(token=token, resource=resource).update(
-                allowed_count=models.F('allowed_count') + 1,
-            )

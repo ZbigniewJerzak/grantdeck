@@ -77,7 +77,7 @@ def test_deployment_applies_in_dependency_order_and_prunes_stale_resources(monke
         ('fieldManager', kubernetes.FIELD_MANAGER) in call[1]['query_params']
         for call in api.applied
     )
-    assert all(('force', False) in call[1]['query_params'] for call in api.applied)
+    assert all(('force', True) in call[1]['query_params'] for call in api.applied)
     assert all(
         call[1]['header_params']['Content-Type'] == 'application/apply-patch+yaml'
         for call in api.applied

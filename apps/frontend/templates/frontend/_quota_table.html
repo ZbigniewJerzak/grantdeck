@@ -1,7 +1,7 @@
 {% load frontend %}
 {% if quota_rows %}
   <div class="table-responsive">
-    <table class="table table-striped table-sm align-middle quota-table{% if admin_view %} js-data-table{% endif %}"{% if admin_view %} data-page-length="25" aria-label="Project quota usage"{% endif %}>
+    <table class="table table-striped table-sm align-middle quota-table{% if admin_view %} js-data-table{% endif %}"{% if admin_view %} data-page-length="25" data-order-column="4" data-order-direction="desc" aria-label="Project quota usage"{% endif %}>
       <thead>
         <tr>
           {% if admin_view %}<th scope="col">User</th>{% endif %}

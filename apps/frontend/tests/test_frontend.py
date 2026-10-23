@@ -15,9 +15,7 @@ from apps.authz.models import (
     ProjectLimitClass,
     ProjectMembership,
     ProjectModelLimit,
-    Resource,
     StaticToken,
-    TokenResourceUsage,
 )
 from apps.frontend.context_processors import show_admin_link
 from apps.frontend.pipeline import log_oauth_response, promote_oidc_admin
@@ -216,6 +214,8 @@ def test_staff_quota_dashboard_lists_all_projects(client, django_user_model):
     first_row = next(row for row in rows if row['project'] == first)
     assert first_row['max_parallel_requests'] is None
     assert b'Not configured' in response.content
+    assert b'data-order-column="4"' in response.content
+    assert b'data-order-direction="desc"' in response.content
     assert response.context['admin_view'] is True
 
 
@@ -291,17 +291,16 @@ def test_home_lists_only_current_users_unexpired_tokens(client, user, django_use
 
 def test_home_includes_current_token_usage(client, user):
     project = create_project(name='Project', end_date=timezone.localdate() + timedelta(days=30))
-    resource = Resource.objects.create(url='http://testserver/api')
     ProjectMembership.objects.create(user=user, project=project, status=MEMBERSHIP_ACTIVE)
     token, _ = StaticToken.create_token(user, 'current', 30, project)
-    TokenResourceUsage.objects.create(token=token, resource=resource, allowed_count=3)
+    token.allowed_count = 3
+    token.save(update_fields=['allowed_count'])
     client.force_login(user)
 
     response = client.get('/')
     token = response.context['memberships'][0].active_tokens[0]
 
-    assert token.allowed_count == 0
-    assert list(token.resource_usage.all())[0].allowed_count == 3
+    assert token.allowed_count == 3
 
 
 def test_home_lists_current_users_project_memberships(client, user):

@@ -74,6 +74,47 @@ def assert_no_policy_warning(response):
     assert not any(message.level == messages.WARNING for message in admin_messages(response))
 
 
+@pytest.mark.parametrize('action', ['create', 'assign', 'reassign', 'clear', 'rename', 'unchanged'])
+def test_project_policy_update_warning(client, django_user_model, action):
+    admin_user = django_user_model.objects.create_superuser(
+        username='admin', email='admin@example.test', password='password',
+    )
+    policy_class = ProjectLimitClass.objects.create(name='Research', slug='research')
+    project = None
+    if action != 'create':
+        project = Project.objects.create(
+            name='Project', shortcut='project',
+            limit_class=None if action == 'assign' else policy_class,
+        )
+    if action == 'reassign':
+        policy_class = ProjectLimitClass.objects.create(name='Other', slug='other')
+    client.force_login(admin_user)
+
+    response = client.post(
+        reverse('admin:authz_project_change', args=[project.pk])
+        if project else reverse('admin:authz_project_add'),
+        {
+            'name': 'Renamed' if action == 'rename' else 'Project',
+            'shortcut': 'project',
+            'administrators': [admin_user.pk],
+            'limit_class': '' if action == 'clear' else str(policy_class.pk),
+            'join_requires_approval': 'on',
+            'projectmembership_set-TOTAL_FORMS': '0',
+            'projectmembership_set-INITIAL_FORMS': '0',
+            '_save': 'Save',
+        },
+    )
+
+    assert response.status_code == 302
+    project = Project.objects.get(shortcut='project')
+    assert project.limit_class_id == (None if action == 'clear' else policy_class.pk)
+    assert project.name == ('Renamed' if action == 'rename' else 'Project')
+    if action in {'create', 'assign', 'reassign', 'clear'}:
+        assert_policy_warning(response)
+    else:
+        assert_no_policy_warning(response)
+
+
 def test_user_admin_lists_project_names(client, django_user_model):
     admin_user = django_user_model.objects.create_superuser(
         username='admin', email='admin@example.test', password='password',

@@ -179,6 +179,12 @@ class ProjectAdmin(ProjectScopedAdmin):
         elif form.cleaned_data.get('clear_join_code'):
             obj.set_join_code('')
         super().save_model(request, obj, form, change)
+        if not change or 'limit_class' in form.changed_data:
+            self.message_user(
+                request,
+                ENVOY_POLICY_UPDATE_MESSAGE,
+                level=messages.WARNING,
+            )
 
 
 @admin.register(ProjectLimitClass)

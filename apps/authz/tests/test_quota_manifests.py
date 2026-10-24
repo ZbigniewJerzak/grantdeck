@@ -3,7 +3,7 @@ from django.core.management.base import CommandError
 from django.test import override_settings
 
 from apps.authz.quota_keys import exported_route_name
-from apps.authz.models import ProjectLimitClass, ProjectModelLimit
+from apps.authz.models import Project, ProjectLimitClass, ProjectModelLimit
 from apps.authz.policies import build_policy_documents
 
 
@@ -21,8 +21,44 @@ EXPORTER_SETTINGS = {
 
 
 @override_settings(**EXPORTER_SETTINGS)
-def test_export_generates_class_model_routes_quota_and_auth_resources():
+def test_export_isolates_projects_sharing_a_limit_class():
     policy_class = ProjectLimitClass.objects.create(name='Research', slug='research')
+    ProjectModelLimit.objects.create(
+        limit_class=policy_class,
+        model_name='bht/large',
+        daily_token_limit=250_000,
+        max_parallel_requests=2,
+    )
+    projects = [
+        Project.objects.create(name='First', shortcut='first', limit_class=policy_class),
+        Project.objects.create(name='Second', shortcut='second', limit_class=policy_class),
+    ]
+    Project.objects.create(name='Unassigned', shortcut='unassigned')
+
+    documents = build_policy_documents()
+
+    routes = [document for document in documents if document['kind'] == 'AIGatewayRoute']
+    quotas = [document for document in documents if document['kind'] == 'BackendTrafficPolicy']
+    security = next(document for document in documents if document['kind'] == 'SecurityPolicy')
+    assert len(routes) == len(quotas) == 2
+    for project in projects:
+        route_ref = exported_route_name(project, 'bht/large')
+        route = next(route for route in routes if route['metadata']['name'] == route_ref)
+        assert route['spec']['rules'][0]['matches'][0]['headers'] == [
+            {'name': 'x-current-project-id', 'type': 'Exact', 'value': str(project.pk)},
+            {'name': 'x-ai-eg-model', 'type': 'Exact', 'value': 'bht/large'},
+        ]
+        quota = next(quota for quota in quotas if quota['spec']['targetRefs'][0]['name'] == route_ref)
+        assert quota['spec']['circuitBreaker']['maxParallelRequests'] == 2
+    assert {target['name'] for target in security['spec']['targetRefs']} == {
+        route['metadata']['name'] for route in routes
+    }
+
+
+@override_settings(**EXPORTER_SETTINGS)
+def test_export_generates_project_model_routes_quota_and_auth_resources():
+    policy_class = ProjectLimitClass.objects.create(name='Research', slug='research')
+    project = Project.objects.create(name='Project', shortcut='project', limit_class=policy_class)
     ProjectModelLimit.objects.create(
         limit_class=policy_class,
         model_name='bht/large',
@@ -35,7 +71,7 @@ def test_export_generates_class_model_routes_quota_and_auth_resources():
     route = next(document for document in documents if document['kind'] == 'AIGatewayRoute')
     quota = next(document for document in documents if document['kind'] == 'BackendTrafficPolicy')
     security = next(document for document in documents if document['kind'] == 'SecurityPolicy')
-    route_ref = exported_route_name(policy_class, 'bht/large')
+    route_ref = exported_route_name(project, 'bht/large')
 
     assert route['metadata']['name'] == route_ref
     assert route['spec']['parentRefs'] == [
@@ -56,7 +92,7 @@ def test_export_generates_class_model_routes_quota_and_auth_resources():
     ]
     headers = route['spec']['rules'][0]['matches'][0]['headers']
     assert headers == [
-        {'name': 'x-current-quota-class', 'type': 'Exact', 'value': 'research'},
+        {'name': 'x-current-project-id', 'type': 'Exact', 'value': str(project.pk)},
         {'name': 'x-ai-eg-model', 'type': 'Exact', 'value': 'bht/large'},
     ]
     assert quota['spec']['targetRefs'][0]['name'] == route_ref
@@ -85,6 +121,7 @@ def test_export_generates_class_model_routes_quota_and_auth_resources():
 @override_settings(**EXPORTER_SETTINGS)
 def test_export_fails_for_model_without_configured_backend_mapping():
     policy_class = ProjectLimitClass.objects.create(name='Unsupported', slug='unsupported')
+    Project.objects.create(name='Project', shortcut='project', limit_class=policy_class)
     ProjectModelLimit.objects.create(
         limit_class=policy_class,
         model_name='unknown/model',
@@ -98,6 +135,7 @@ def test_export_fails_for_model_without_configured_backend_mapping():
 @override_settings(**EXPORTER_SETTINGS)
 def test_export_omits_circuit_breaker_when_limits_are_unset():
     policy_class = ProjectLimitClass.objects.create(name='Research', slug='research')
+    Project.objects.create(name='Project', shortcut='project', limit_class=policy_class)
     ProjectModelLimit.objects.create(
         limit_class=policy_class,
         model_name='bht/large',

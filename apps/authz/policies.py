@@ -1,7 +1,7 @@
 from django.conf import settings
 from django.core.management.base import CommandError
 
-from apps.authz.models import ProjectLimitClass
+from apps.authz.models import Project
 from apps.authz.quota_keys import exported_route_name
 
 
@@ -16,14 +16,14 @@ def managed_metadata(name):
     }
 
 
-def route_document(policy_class, model_limit):
+def route_document(project, model_limit):
     backend = settings.AIGATEWAY_MODEL_BACKENDS.get(model_limit.model_name)
     if backend is None:
         raise CommandError(
             f'No AIGateway backend mapping exists for model {model_limit.model_name!r}.'
         )
 
-    name = exported_route_name(policy_class, model_limit.model_name)
+    name = exported_route_name(project, model_limit.model_name)
     return {
         'apiVersion': 'aigateway.envoyproxy.io/v1beta1',
         'kind': 'AIGatewayRoute',
@@ -47,9 +47,9 @@ def route_document(policy_class, model_limit):
                 'matches': [{
                     'headers': [
                         {
-                            'name': 'x-current-quota-class',
+                            'name': 'x-current-project-id',
                             'type': 'Exact',
-                            'value': policy_class.slug,
+                            'value': str(project.pk),
                         },
                         {
                             'name': 'x-ai-eg-model',
@@ -66,8 +66,8 @@ def route_document(policy_class, model_limit):
     }
 
 
-def quota_document(policy_class, model_limit):
-    target_name = exported_route_name(policy_class, model_limit.model_name)
+def quota_document(project, model_limit):
+    target_name = exported_route_name(project, model_limit.model_name)
     document = {
         'apiVersion': 'gateway.envoyproxy.io/v1alpha1',
         'kind': 'BackendTrafficPolicy',
@@ -153,15 +153,16 @@ def security_policy_document(route_names):
 
 
 def build_policy_documents():
-    policy_classes = list(
-        ProjectLimitClass.objects.order_by('pk').prefetch_related('model_limits')
+    projects = list(
+        Project.objects.filter(limit_class__isnull=False).order_by('pk')
+        .select_related('limit_class').prefetch_related('limit_class__model_limits')
     )
     documents = []
     route_names = []
-    for policy_class in policy_classes:
-        for model_limit in policy_class.model_limits.all():
-            route = route_document(policy_class, model_limit)
-            documents.extend([route, quota_document(policy_class, model_limit)])
+    for project in projects:
+        for model_limit in project.limit_class.model_limits.all():
+            route = route_document(project, model_limit)
+            documents.extend([route, quota_document(project, model_limit)])
             route_names.append(route['metadata']['name'])
 
     if route_names:
